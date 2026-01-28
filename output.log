@@ -1,0 +1,20 @@
+
+Raw data shape:-
+ White ref:(1, 1004, 826)
+ Dark ref:(1, 1004, 826)
+ Image:(1010, 1004, 826)
+
+
+original dimension: (1010, 1004, 826)
+Reduced Hyperspectral Data Shape: (1014040, 826)
+starting with est_noise
+hysime initiated
+hysime completed...HfcVd begins
+HfcVd done...noise is being removed
+HySIME_plot_saved_complete
+Averaging done
+Smoothening complete
+normlisation complete
+pre_processing concluded 
+runtime:19.088826684157052min.
+Hybrid QNN device: cuda
