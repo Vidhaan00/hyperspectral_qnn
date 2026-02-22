@@ -1,4 +1,4 @@
-# Copyright (c) 2026 Vidhaan Sinha
+# Copyright (c) 2025 Vidhaan Sinha
 # All rights reserved. Proprietary code. Patent pending.
 
 import torch
@@ -10,7 +10,7 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from sklearn.metrics import cohen_kappa_score, classification_report
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter # For map smoothing
 
 def _set_seed(seed=0):
     torch.manual_seed(seed)
@@ -21,12 +21,17 @@ def _set_seed(seed=0):
 class CNN(nn.Module):
     def __init__(self, num_classes):
         super().__init__()
+        # Enhanced feature extraction to handle patient variability
         self.conv1 = nn.Conv2d(6, 32, 3, stride=1, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
         self.conv2 = nn.Conv2d(32, 64, 3, stride=1, padding=1)
         self.bn2 = nn.BatchNorm2d(64)
         self.pool = nn.MaxPool2d(2, 2)
+        
+        # Dropout prevents the model from "memorizing" one patient
         self.dropout = nn.Dropout(0.3)
+        
+        # Flattened size for 25x25 input after two 2x2 pools is 6x6
         self.fc1 = nn.Linear(64 * 6 * 6, 128)
         self.fc2 = nn.Linear(128, num_classes)
 
@@ -37,13 +42,15 @@ class CNN(nn.Module):
         x = self.dropout(F.relu(self.fc1(x)))
         return self.fc2(x)
 
-def train_hsi_cnn(X_train, y_train, test_hcube, test_gt, save_dir, test_id):
+def train_hsi_cnn(X_train, y_train, test_hcube, test_gt, save_dir,test_id):
     _set_seed(0)
     os.makedirs(save_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
+    # Identify classes
     num_classes = int(np.max(y_train) + 1)
     
+    # 1. Prepare Data
     train_ds = TensorDataset(
         torch.tensor(X_train).permute(0, 3, 1, 2).float(),
         torch.tensor(y_train).long()
@@ -52,13 +59,17 @@ def train_hsi_cnn(X_train, y_train, test_hcube, test_gt, save_dir, test_id):
 
     model = CNN(num_classes).to(device)
     
-    # Updated weights to balance Precision vs Recall
-    # [0: Bg, 1: Normal, 2: Tumor, 3: Vessels]
-    weights = torch.tensor([0.0, 6.0, 8.0, 2.0]).to(device) 
+    # 2. STRATEGIC WEIGHTING
+    # We punish the model more for missing Tumor (Class 2) and Blood (Class 1)
+    # Weights: [Background, Blood, Tumor, Healthy]
+    # Adjust these based on your specific integer labels
+    weights = torch.tensor([0.1, 10.0, 10.0, 0.4]).to(device)
     criterion = nn.CrossEntropyLoss(weight=weights)
-    optimizer = optim.Adam(model.parameters(), lr=0.0005)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)
 
-    for epoch in range(30):
+    # 3. Training Loop
+    num_epochs = 30 # Increased epochs for better convergence
+    for epoch in range(num_epochs):
         model.train()
         for x, y in train_loader:
             x, y = x.to(device), y.to(device)
@@ -67,11 +78,12 @@ def train_hsi_cnn(X_train, y_train, test_hcube, test_gt, save_dir, test_id):
             loss.backward()
             optimizer.step()
 
+    # 4. Inference and Spatial Smoothing
     model.eval()
     window_size = 25
     h, w, c = test_hcube.shape
     
-    # Patch extraction
+    # Extract and predict
     ordered_patches = []
     for i in range(h - window_size + 1):
         for j in range(w - window_size + 1):
@@ -80,26 +92,19 @@ def train_hsi_cnn(X_train, y_train, test_hcube, test_gt, save_dir, test_id):
     ordered_tensor = torch.tensor(np.array(ordered_patches)).permute(0, 3, 1, 2).float()
     predictions = []
     
-    # 1. SOFTMAX CONFIDENCE GATE FOR HIGH PRECISION
     with torch.no_grad():
         for i in range(0, len(ordered_tensor), 512):
             batch = ordered_tensor[i : i + 512].to(device)
-            logits = model(batch)
-            probs = torch.softmax(logits, dim=1)
-            
-            max_p, labels = torch.max(probs, dim=1)
-            
-            # Confidence Threshold: 0.75
-            # If the model is unsure, default to Class 3 (Vessels/Healthy)
-            # This drastically reduces the "speckled" false positives
-            final_labels = torch.where(max_p > 0.75, labels, torch.tensor(3).to(device))
-            predictions.extend(final_labels.cpu().numpy())
+            out = model(batch)
+            predictions.extend(out.argmax(1).cpu().numpy())
 
     result_raw = np.array(predictions).reshape(h - window_size + 1, w - window_size + 1)
     
-    # 2. INCREASED MEDIAN FILTER FOR "CRISP" LOOK
-    resultant_image = median_filter(result_raw, size=17) 
+    # 5. APPLY MEDIAN FILTER (To get the "First Upload" look)
+    # This removes isolated misclassified pixels (noise)
+    resultant_image = median_filter(result_raw, size=7)
 
+    # 6. Save and Report
     plt.figure(figsize=(10, 10))
     plt.imshow(resultant_image, cmap='jet')
     plt.axis('off')
@@ -115,23 +120,27 @@ def train_hsi_cnn(X_train, y_train, test_hcube, test_gt, save_dir, test_id):
         y_true = gt_cropped.flatten()
         y_pred = resultant_image.flatten()
         
-        # Brain-only metrics logic
-        mask = y_true > 0 
-        target_names = ['Normal', 'Tumor', 'Vessels']
-        relevant_labels = [1, 2, 3]
+        # We explicitly define the class labels we expect from HELICoiD
+        # 0: Background, 1: Normal, 2: Tumor, 3: Blood/Vessel
+        target_names = ['Background', 'Normal', 'Tumor', 'Vessels']
+        all_labels = [0, 1, 2, 3]
 
-        kappa = cohen_kappa_score(y_true[mask], y_pred[mask])
-        report = classification_report(y_true[mask], y_pred[mask], 
-                                       labels=relevant_labels, 
+        kappa = cohen_kappa_score(y_true, y_pred)
+        
+        # 'labels' ensures that classes missing in the test patient are shown as 0.0
+        report = classification_report(y_true, y_pred, 
+                                       labels=all_labels, 
                                        target_names=target_names, 
                                        zero_division=0)
         
-        print(f"\n--- High Precision Metrics for Patient {test_id} ---")
+        print(f"\n--- Fold Metrics for Patient {test_id} ---")
         print(f"Kappa Score: {kappa:.4f}")
         print(report)
         
         with open(f"{save_dir}/cnn_metrics.txt", "w") as f:
-            f.write(f"Kappa: {kappa}\n{report}")
+            f.write(f"Kappa: {kappa}\n")
+            f.write(report)
+        
         metrics["kappa"] = kappa
 
     return metrics

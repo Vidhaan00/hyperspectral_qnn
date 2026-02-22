@@ -3,6 +3,7 @@ import scipy
 import scipy.stats as ss
 from scipy.ndimage import uniform_filter
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 
 def est_noise(y, noise_type='additive'):
     """
@@ -210,10 +211,13 @@ def remove_noise(y, w):
 
 
 
-def pre_call(white_ref,dark_ref,data_ref):
+def pre_call(white_ref,dark_ref,data_ref,id,num_components=6):
     white_nparr = np.array(white_ref.load())
     dark_nparr = np.array(dark_ref.load())
     data_nparr = np.array(data_ref.load())
+
+
+    print(f"{'='*20}Working on {id}{'='*20}")
     print("\nRaw data shape:-\n White ref:{}\n Dark ref:{}\n Image:{}".format(white_nparr.shape,dark_nparr.shape,data_nparr.shape))
 
     corrected_nparr = 100*np.divide(np.subtract(data_nparr, dark_nparr),np.subtract(white_nparr, dark_nparr))
@@ -226,14 +230,14 @@ def pre_call(white_ref,dark_ref,data_ref):
     plt.grid(1)
     plt.ylabel('Radiance')
     plt.xlabel('Wavelength (nm)')
-    plt.savefig('/home/vs/HSI/results/0008//pre_processing_output/Raw_spectral_signature.png',dpi=1000)
+    plt.savefig(f'/home/vs/HSI/results/{id}/pre_processing_output/Raw_spectral_signature.png',dpi=1000)
     plt.clf()
 
     plt.plot(corrected_nparr[y, x, :])
     plt.grid(1)
     plt.ylabel('Relative Reflectance')
     plt.xlabel('Wavelength (nm)')
-    plt.savefig('/home/vs/HSI/results/0008/pre_processing_output/Calibrated_spectral_signature.png',dpi=1000)
+    plt.savefig(f'/home/vs/HSI/results/{id}/pre_processing_output/Calibrated_spectral_signature.png',dpi=1000)
     plt.clf()
 
     hyperspectral_data =  corrected_nparr
@@ -260,7 +264,7 @@ def pre_call(white_ref,dark_ref,data_ref):
     plt.grid(1)
     plt.ylabel('Relative Reflectance')
     plt.xlabel('Wavelength (nm)')
-    plt.savefig('/home/vs/HSI/results/0008/pre_processing_output/HySIME_filtered_spectral_signature.png',dpi=1000)
+    plt.savefig(f'/home/vs/HSI/results/{id}/pre_processing_output/HySIME_filtered_spectral_signature.png',dpi=1000)
     plt.clf()
 
     print("HySIME_plot_saved_complete")
@@ -304,8 +308,20 @@ def pre_call(white_ref,dark_ref,data_ref):
     plt.grid(1)
     plt.ylabel('Normalised Reflectance')
     plt.xlabel('Feature')
-    plt.savefig('/home/vs/HSI/results/0008/pre_processing_output/Final_pre_processed_spectral_signature.png',dpi=1000)
+    plt.savefig(f'/home/vs/HSI/results/{id}/pre_processing_output/Final_pre_processed_spectral_signature.png',dpi=1000)
     plt.clf()
 
-    mat_dict = {"preprocessed_data": Y_BC}
-    return mat_dict
+    print(f"Applying PCA: Reducing 140 bands to {num_components} components...")
+
+    # Flatten to (Pixels, 140) for PCA
+    flat_data = Y_BC.reshape(-1, desired_num_bands)
+
+    pca = PCA(n_components=num_components)
+    pca_data = pca.fit_transform(flat_data)
+
+    # Reshape back to (Height, Width, 6)
+    final_preprocessed = pca_data.reshape(x_pixel, y_pixel, num_components)
+
+    return {"preprocessed_data": final_preprocessed}
+    
+

@@ -1,6 +1,0 @@
-Traceback (most recent call last):
-  File "/home/vs/QML/main.py", line 31, in <module>
-    q_model, q_pred_img = train_hsi_qnn(hcube, gtLabel)
-  File "/home/vs/QML/qnn.py", line 123, in train_hsi_qnn
-    torch.LongTensor(l_shuffled[:split_idx]))
-TypeError: 'numpy.float32' object cannot be interpreted as an integer
